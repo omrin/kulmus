@@ -18,6 +18,8 @@ datas = [
      "models/sherpa-onnx-pyannote-segmentation-3-0"),
     (str(ROOT / "icon.ico"), "."),
     (str(ROOT / "icon.png"), "."),
+    (str(ROOT / "LICENSE"), "."),
+    (str(ROOT / "THIRD_PARTY_NOTICES.md"), "."),   # attribution required by CC BY 4.0 / Apache-2.0
 ]
 binaries, hiddenimports = [], ["worker", "voices", "engine", "recorder", "library", "icons"]
 for pkg in ("faster_whisper", "ctranslate2", "sherpa_onnx", "onnxruntime", "av", "tokenizers",
