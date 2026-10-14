@@ -1,0 +1,107 @@
+# Builds Kulmus (קולמוס) for Windows, macOS and Linux, self-tests each build, and publishes them to a
+# GitHub Release when a version tag is pushed:   git tag v1.0.0 && git push origin v1.0.0
+# The download page reads the download counts of these release files from the GitHub API.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: Kulmus-Windows-Setup.exe
+          - os: macos-14            # Apple Silicon (M1 and newer)
+            asset: Kulmus-macOS-AppleSilicon.dmg
+          - os: macos-15-intel      # Intel Macs
+            asset: Kulmus-macOS-Intel.dmg
+          - os: ubuntu-22.04
+            asset: Kulmus-Linux-x64.tar.gz
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: System libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2 libpulse0 libxcb-cursor0 libegl1 libgl1 libxkbcommon-x11-0 \
+            libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-randr0 libxcb-render-util0
+
+      - name: Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Speaker models
+        run: python packaging/fetch_models.py
+
+      - name: Build
+        run: pyinstaller packaging/kulmus.spec --noconfirm
+
+      - name: Cache the transcription model (for the self-test)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-ivrit-turbo-ct2
+
+      - name: Self-test (download + load the model through the worker process)
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then APP=dist/Kulmus/Kulmus.exe;
+          elif [ "$RUNNER_OS" = "macOS" ]; then APP=dist/Kulmus.app/Contents/MacOS/Kulmus;
+          else APP=dist/Kulmus/Kulmus; fi
+          "$APP" --selftest selftest.json --warmup || (cat selftest.json; exit 1)
+          cat selftest.json
+
+      - name: Package (Windows installer)
+        if: runner.os == 'Windows'
+        run: |
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=${{ github.ref_name }} packaging\installer.iss
+          Move-Item packaging\Output\Kulmus-Windows-Setup.exe ${{ matrix.asset }}
+
+      - name: Package (macOS disk image)
+        if: runner.os == 'macOS'
+        run: hdiutil create -volname "Kulmus" -srcfolder dist/Kulmus.app -ov -format UDZO ${{ matrix.asset }}
+
+      - name: Package (Linux archive)
+        if: runner.os == 'Linux'
+        run: |
+          cp packaging/kulmus.desktop packaging/install-linux.sh icon.png dist/Kulmus/
+          tar -C dist -czf ${{ matrix.asset }} Kulmus
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true

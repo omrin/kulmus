@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=קולמוס
+Name[en]=Kulmus
+Comment=Offline Hebrew transcription
+Exec=Kulmus
+Icon=kulmus
+Terminal=false
+Categories=AudioVideo;Audio;Utility;
