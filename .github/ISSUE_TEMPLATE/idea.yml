@@ -1,0 +1,11 @@
+name: 💡 הצעה לשיפור
+description: רעיון לתכונה חדשה או לשיפור
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: מה הייתם רוצים?
+      description: תארו את הרעיון ולמה הוא יעזור לכם
+    validations:
+      required: true

@@ -157,6 +157,8 @@ section.band.alt { background: var(--surface); border-block: 1px solid var(--lin
 .os .count { font-size: .85rem; color: var(--muted); }
 .os .count b { font-family: var(--mono); font-weight: 500; color: var(--ink); }
 .note { font-size: .88rem; color: var(--warn); }
+.buttons.contact { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+#contact .note { color: var(--muted); margin-top: 14px; }
 @media (max-width: 900px) { .dl-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* requirements + limits */
@@ -197,6 +199,7 @@ footer a { color: var(--muted); }
       <a href="#download">הורדה</a>
       <a href="#requirements">דרישות ומגבלות</a>
       <a href="#faq">שאלות</a>
+      <a href="#contact">יצירת קשר</a>
     </nav>
     <a class="btn btn-primary btn-sm" href="#download">הורדה חינם</a>
   </div>
@@ -384,12 +387,26 @@ footer a { color: var(--muted); }
       </div>
     </div>
   </section>
+
+  <section class="band" id="contact">
+    <div class="wrap">
+      <div class="head"><span class="eyebrow">יצירת קשר</span><h2>מצאתם באג? יש לכם רעיון?</h2>
+        <p>נשמח לשמוע. כל דיווח עוזר לשפר את קולמוס לכולם. אפשר לדווח גם מתוך התוכנה: ⚙ ← „דיווח על באג או הצעה לשיפור".</p></div>
+      <div class="buttons contact">
+        <a class="btn btn-primary" data-issue="bug.yml" href="#">🐞 דיווח על באג</a>
+        <a class="btn btn-quiet" data-issue="idea.yml" href="#">💡 הצעה לשיפור</a>
+        <a class="btn btn-quiet" data-path="discussions" href="#">💬 שאלות ושיחה</a>
+      </div>
+      <p class="note">הדיווחים מתפרסמים ב-GitHub ונראים לכולם, ונדרש חשבון GitHub חינמי. אל תצרפו הקלטות או תמלולים אישיים.</p>
+    </div>
+  </section>
 </main>
 
 <footer>
   <div class="wrap">
     <span>קולמוס · תמלול עברית בחינם ובקוד פתוח</span>
     <span>מבוסס על מודל העברית של <a href="https://huggingface.co/ivrit-ai/whisper-large-v3-turbo-ct2" rel="noopener">ivrit.ai</a>, ‏Whisper, ‏faster-whisper ו-sherpa-onnx · <a id="source-link" href="#" rel="noopener">קוד המקור</a></span>
+    <span id="privacy-note" hidden>האתר סופר כניסות בעזרת GoatCounter, בלי עוגיות ובלי מידע אישי.</span>
   </div>
 </footer>
 
@@ -399,6 +416,7 @@ const CONFIG = {
   repo: "omrin/kulmus",   // GitHub repository whose Releases hold the installers
   counterEndpoint: "",                      // optional, own server: "api/stats.php" (see api/README)
   downloadVia: "",                          // optional, own server: "api/download.php?file="
+  goatcounter: "",                          // visit counter: the code chosen at goatcounter.com, e.g. "kulmus"
 };
 // --------------------------------------------------------------------------------------------------
 
@@ -407,6 +425,25 @@ const releaseUrl = (asset) => `https://github.com/${CONFIG.repo}/releases/latest
 const hrefFor = (asset) => CONFIG.downloadVia ? CONFIG.downloadVia + encodeURIComponent(asset) : releaseUrl(asset);
 
 document.getElementById("source-link").href = configured ? `https://github.com/${CONFIG.repo}` : "#";
+document.querySelectorAll("[data-issue]").forEach((a) => {
+  a.href = configured ? `https://github.com/${CONFIG.repo}/issues/new?template=${a.dataset.issue}` : "#contact";
+  a.rel = "noopener";
+});
+document.querySelectorAll("[data-path]").forEach((a) => {
+  a.href = configured ? `https://github.com/${CONFIG.repo}/${a.dataset.path}` : "#contact";
+  a.rel = "noopener";
+});
+
+// visit counter: GoatCounter counts page views without cookies and without personal data
+if (CONFIG.goatcounter) {
+  const gc = document.createElement("script");
+  gc.async = true;
+  gc.src = "https://gc.zgo.at/count.js";
+  gc.dataset.goatcounter = `https://${CONFIG.goatcounter}.goatcounter.com/count`;
+  document.body.appendChild(gc);
+  document.getElementById("privacy-note").hidden = false;
+}
+
 document.querySelectorAll("[data-asset]").forEach((a) => {
   a.href = configured ? hrefFor(a.dataset.asset) : "#download";
   a.rel = "noopener";

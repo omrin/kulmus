@@ -27,6 +27,8 @@ from recorder import RATE, Recorder, find_input, friendly_error, list_inputs
 from worker import JobError, make_backend
 
 APP_NAME = "קולמוס"
+APP_VERSION = "1.0.1"
+REPO_URL = "https://github.com/omrin/kulmus"
 AUDIO_EXT = "*.wav *.mp3 *.m4a *.ogg *.opus *.flac *.aac *.wma *.webm *.mp4 *.mkv *.mov *.amr *.3gp"
 
 # ------------------------------------------------------------------ look & feel
@@ -130,6 +132,25 @@ def speaker_color(key: str) -> str:
 
 def open_path(path):
     QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+
+def os_description() -> str:
+    import platform
+    if sys.platform == "darwin":
+        return f"macOS {platform.mac_ver()[0]} ({platform.machine()})"
+    if sys.platform == "win32":
+        return f"Windows {platform.release()} (build {platform.version()})"
+    try:
+        return platform.freedesktop_os_release().get("PRETTY_NAME", "Linux")
+    except OSError:
+        return "Linux"
+
+
+def report_issue():
+    """Opens the bug-report form on GitHub with the version and OS already filled in."""
+    from urllib.parse import urlencode
+    query = urlencode({"template": "bug.yml", "version": APP_VERSION, "os": os_description()})
+    QDesktopServices.openUrl(QUrl(f"{REPO_URL}/issues/new?{query}"))
 
 
 def icon_button(name: str, tip: str) -> QToolButton:
@@ -812,6 +833,11 @@ class MainWindow(QMainWindow):
         default = lib.default_root()
         if Path(root) != default:
             m.addAction("חזרה לתיקיית ברירת המחדל", lambda: self.switch_library(default))
+        m.addSeparator()
+        m.addAction("דיווח על באג או הצעה לשיפור…", report_issue)
+        m.addAction("פתיחת תיקיית היומן", lambda: open_path(lib.app_dir()))
+        about = m.addAction(f"{APP_NAME} {APP_VERSION}")
+        about.setEnabled(False)
 
     def choose_library_folder(self):
         new = QFileDialog.getExistingDirectory(self, "בחירת תיקייה להקלטות ולתמלולים", str(self.library.root))

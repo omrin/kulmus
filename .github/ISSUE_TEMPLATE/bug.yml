@@ -1,0 +1,43 @@
+name: 🐞 דיווח על באג
+description: משהו לא עובד כמו שצריך
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        תודה שאתם עוזרים לשפר את קולמוס! 🙏
+        **אל תצרפו הקלטות או תמלולים אישיים** — הדיווח הזה ציבורי.
+  - type: textarea
+    id: what
+    attributes:
+      label: מה קרה?
+      description: מה עשיתם, מה ציפיתם שיקרה, ומה קרה בפועל
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: איך לשחזר (אם יודעים)
+      placeholder: |
+        1. לחצתי על „הקלטת שיחה"
+        2. ...
+  - type: input
+    id: os
+    attributes:
+      label: מערכת הפעלה
+      placeholder: Windows 11 / macOS 15 / Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: גרסת קולמוס
+      placeholder: "1.0.1"
+  - type: textarea
+    id: log
+    attributes:
+      label: קובץ היומן (רשות)
+      description: |
+        בתפריט ההגדרות ⚙ ← „פתיחת תיקיית היומן", קובץ app.log. הדביקו כאן את השורות האחרונות.
+        היומן לא מכיל את תוכן ההקלטות, אבל עברו עליו לפני ההדבקה.
+      render: text
