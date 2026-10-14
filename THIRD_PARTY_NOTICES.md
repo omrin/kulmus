@@ -8,7 +8,7 @@
 | Silero VAD (bundled with faster-whisper) | voice activity detection | MIT |
 | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | speaker diarization runtime | Apache-2.0 |
 | [pyannote segmentation 3.0](https://huggingface.co/pyannote/segmentation-3.0) (ONNX export by sherpa-onnx) | speaker turn segmentation | MIT |
-| [WeSpeaker ResNet34 (VoxCeleb)](https://github.com/wenet-e2e/wespeaker) | speaker embeddings | Apache-2.0 |
+| [WeSpeaker ResNet34 (VoxCeleb)](https://github.com/wenet-e2e/wespeaker) | speaker embeddings | code Apache-2.0; pretrained weights [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) (they follow the VoxCeleb dataset license) — © WeSpeaker authors |
 | [ONNX Runtime](https://github.com/microsoft/onnxruntime) | model runtime | MIT |
 | [Qt / PySide6](https://www.qt.io/qt-for-python) | user interface, audio playback | LGPL-3.0 (dynamically linked, unmodified) |
 | [FFmpeg](https://ffmpeg.org) via [PyAV](https://github.com/PyAV-Org/PyAV) and Qt Multimedia | audio decoding/encoding | LGPL-2.1+ |
