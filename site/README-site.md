@@ -1,6 +1,9 @@
 # אתר ההורדה של קולמוס
 
-## העלאה לשרת
+## אירוח
+האתר מתפרסם אוטומטית ב-GitHub Pages ‏(https://omrin.github.io/kulmus/) בכל שינוי בתיקייה `site/` (`.github/workflows/pages.yml`). ב-GitHub Pages אין PHP, ולכן שם המונה מגיע מ-GitHub בלבד.
+
+## העלאה לשרת משלכם
 מעלים לשרת את: `index.html`, התיקייה `img/`, ואם רוצים מונה בשרת שלכם גם את `api/`.
 (`page.html` ו-`build_site.py` הם קבצי מקור: אחרי שינוי ב-`page.html` מריצים `python build_site.py`.)
 
