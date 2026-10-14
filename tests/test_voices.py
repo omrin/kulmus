@@ -26,6 +26,10 @@ class FakeEmbedder:
                 return v / np.linalg.norm(v)
         raise AssertionError(t)
 
+    def center(self, v):
+        import voices
+        return voices.Embedder.center(self, v)
+
     def centroid(self, members):
         import voices
         return voices.Embedder.centroid(self, members)
@@ -75,6 +79,49 @@ def test_refine_absorbs_a_tiny_fragment_into_the_closest_voice():
     new, vecs = _refine(turns, by_time)
     assert [k for _, _, k in new] == [0, 0, 1]
     assert 5 not in vecs
+
+
+def _phone_like(seed, same_person):
+    """Two clusters of 8 two-second turns whose centroids are ~0.75 alike, as in a phone call. Two people:
+    each turn sounds like its own speaker. One person: the turns vary a lot and the split is arbitrary."""
+    rng = np.random.default_rng(seed)
+    common = np.zeros(16); common[0] = 1.0
+    p = common + 0.6 * np.eye(16)[1]
+    q = common + 0.6 * np.eye(16)[2]
+    turns, by_time = [], []
+    for i in range(16):
+        k = i % 2
+        if same_person:
+            v = p + 0.45 * rng.standard_normal(16) + (0.3 * np.eye(16)[2] if k else 0)
+        else:
+            v = (p if k == 0 else q) + 0.05 * rng.standard_normal(16)
+        turns.append((2 * i, 2 * i + 2, k))
+        by_time.append((2 * i, 2 * i + 2, v))
+    return turns, by_time
+
+
+def _centroid_sim(turns, by_time):
+    c = [np.mean([v / np.linalg.norm(v) for (s, e, k), (_, _, v) in zip(turns, by_time) if k == j], axis=0)
+         for j in (0, 1)]
+    return float(c[0] @ c[1] / np.linalg.norm(c[0]) / np.linalg.norm(c[1]))
+
+
+def test_refine_separates_similar_but_consistent_voices_like_a_phone_call():
+    turns, by_time = _phone_like(1, same_person=False)
+    import voices
+    assert voices.MERGE_SIM <= _centroid_sim(turns, by_time) < voices.SURE_SIM   # the case the test is about
+    new, vecs = _refine(turns, by_time)
+    assert len(vecs) == 2
+    assert {k for _, _, k in new[0::2]} != {k for _, _, k in new[1::2]}
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_refine_keeps_one_variable_voice_as_one_speaker(seed):
+    turns, by_time = _phone_like(seed, same_person=True)
+    import voices
+    assert voices.MERGE_SIM <= _centroid_sim(turns, by_time) < voices.SURE_SIM
+    new, vecs = _refine(turns, by_time)
+    assert len(vecs) == 1
 
 
 def test_identify_is_one_to_one_and_needs_a_close_voice():

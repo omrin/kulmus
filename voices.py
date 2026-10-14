@@ -28,6 +28,11 @@ MIN_TURN = 0.8         # s: shorter turns are too short for a reliable embedding
 MAX_PER_SPEAKER = 120  # s of audio embedded per speaker (enough for a stable voiceprint)
 TINY = 2.0             # s: a cluster with less speech than this is a fragment ...
 TINY_SHARE = 0.02      # ... and so is one with under 2% of all speech (in long recordings)
+# Phone calls and other compressed audio make every voice sound alike (two people can reach 0.75), so a
+# similarity above MERGE_SIM is only trusted when the clusters cannot be told apart segment by segment:
+SURE_SIM = 0.9         # this similar -> the same person, no further test
+SEPARABLE = 2.5        # mean d' between the diarizer's original clusters of the two groups that marks two people
+MIN_SEP_SEGS = 5       # segments a cluster needs for the separability test
 
 DEFAULT_NAME = re.compile(r"^(דובר|משתתף)( \d+)?$")
 
@@ -46,12 +51,34 @@ class Embedder:
         v = np.asarray(self.ext.compute(s), dtype=np.float64)
         return v / (np.linalg.norm(v) or 1.0)
 
+    def center(self, v: np.ndarray) -> np.ndarray:
+        if self.mean is not None:
+            v = v - self.mean
+        return v / (np.linalg.norm(v) or 1.0)
+
     def centroid(self, members) -> np.ndarray:
         """members: [(raw embedding, weight)] -> centered, unit-length speaker vector."""
-        c = np.average(np.array([m for m, _ in members]), axis=0, weights=[w for _, w in members])
-        if self.mean is not None:
-            c = c - self.mean
-        return c / (np.linalg.norm(c) or 1.0)
+        return self.center(np.average(np.array([m for m, _ in members]), axis=0, weights=[w for _, w in members]))
+
+
+def separability(ma, mb, embedder) -> float:
+    """How clearly two clusters are different voices: d' of each segment's margin between its own cluster
+    (leave-one-out) and the other cluster. Same person split in two: ~0.5-1.5; two people: 2-6."""
+    margins = []
+    for own, other in ((ma, mb), (mb, ma)):
+        oc = embedder.centroid(other)
+        xs = np.array([x for x, _ in own])
+        ws = np.array([w for _, w in own])
+        tot, wsum = (ws[:, None] * xs).sum(axis=0), ws.sum()
+        for x, w in own:
+            if wsum - w <= 0:
+                continue
+            cx = embedder.center(x)
+            margins.append(float(cx @ embedder.center((tot - w * x) / (wsum - w)) - cx @ oc))
+    if len(margins) < 2:
+        return 0.0
+    m = np.array(margins)
+    return float(m.mean() / (m.std() + 1e-9))
 
 
 def _members(audio, turns, embedder, label):
@@ -85,20 +112,50 @@ def refine(audio: np.ndarray, turns, embedder: Embedder, fixed: bool = False):
         return embedder.centroid(mem[k]) if mem[k] else None
 
     if not fixed:
+        # The separability of two groups is the average over the diarizer's original clusters in them:
+        # testing the merged groups directly dilutes it, because a grown group mixes sub-clusters.
+        group = {k: [k] for k in labels}
+        orig_secs = dict(secs)
+        testable = [k for k in labels if len(mem[k]) >= MIN_SEP_SEGS]
+        mem_orig = {k: list(mem[k]) for k in labels}
+        dp = {}
+
+        def pair_dprime(i, j):
+            key = frozenset((i, j))
+            if key not in dp:
+                dp[key] = separability(mem_orig[i], mem_orig[j], embedder)
+            return dp[key]
+
+        def apart_groups(a, b):
+            pairs = [(i, j) for i in group[a] for j in group[b] if i in testable and j in testable]
+            if not pairs:
+                return False
+            w = np.array([orig_secs[i] * orig_secs[j] for i, j in pairs])
+            d = np.array([pair_dprime(i, j) for i, j in pairs])
+            return float((w * d).sum() / w.sum()) >= SEPARABLE
+
+        apart = set()                    # pairs found to be different people (until one of them changes)
         while True:
             live = [k for k in labels if root(k) == k and mem[k]]
-            best, pair = MERGE_SIM, None
             vs = {k: vec(k) for k in live}
-            for i, a in enumerate(live):
-                for b in live[i + 1:]:
-                    sim = float(vs[a] @ vs[b])
-                    if sim >= best:
-                        best, pair = sim, (a, b)
+            cands = sorted(((float(vs[a] @ vs[b]), a, b) for i, a in enumerate(live) for b in live[i + 1:]
+                            if frozenset((a, b)) not in apart), reverse=True)
+            pair = None
+            for sim, a, b in cands:
+                if sim < MERGE_SIM:
+                    break
+                if sim < SURE_SIM and apart_groups(a, b):
+                    apart.add(frozenset((a, b)))
+                    continue
+                pair = (a, b)
+                break
             if pair is None:
                 break
             a, b = pair
+            apart = {p for p in apart if a not in p and b not in p}
             keep, gone = (a, b) if secs[a] >= secs[b] else (b, a)
             alias[gone] = keep
+            group[keep] += group[gone]
             mem[keep] += mem[gone]
             secs[keep] += secs[gone]
             mem[gone], secs[gone] = [], 0.0
