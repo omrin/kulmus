@@ -11,7 +11,6 @@ NAME = "Kulmus"
 
 datas = [
     (str(ROOT / "models" / "wespeaker.onnx"), "models"),
-    (str(ROOT / "models" / "wespeaker_mean.npy"), "models"),
     (str(ROOT / "models" / "sherpa-onnx-pyannote-segmentation-3-0" / "model.onnx"),
      "models/sherpa-onnx-pyannote-segmentation-3-0"),
     (str(ROOT / "models" / "sherpa-onnx-pyannote-segmentation-3-0" / "LICENSE"),
@@ -21,8 +20,8 @@ datas = [
     (str(ROOT / "LICENSE"), "."),
     (str(ROOT / "THIRD_PARTY_NOTICES.md"), "."),   # attribution required by CC BY 4.0 / Apache-2.0
 ]
-binaries, hiddenimports = [], ["worker", "voices", "engine", "recorder", "library", "icons"]
-for pkg in ("faster_whisper", "ctranslate2", "sherpa_onnx", "onnxruntime", "av", "tokenizers",
+binaries, hiddenimports = [], ["worker", "voices", "engine", "diarize", "recorder", "library", "icons"]
+for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av", "tokenizers",
             "sounddevice", "_sounddevice_data", "soundcard", "huggingface_hub"):
     try:
         d, b, h = collect_all(pkg)

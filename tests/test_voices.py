@@ -1,4 +1,4 @@
-"""Speaker separation refinement and recognising named voices."""
+"""Speaker diarization (diarize.py), voiceprints and recognising named voices."""
 
 import os
 from pathlib import Path
@@ -10,13 +10,14 @@ import fakes
 from conftest import wait_until
 from test_round2 import write_wav
 
+MODELS = Path(__file__).resolve().parent.parent / "models"
+
 
 class FakeEmbedder:
     """embed() returns the voice of whoever speaks at that time (vectors given per time range)."""
 
-    def __init__(self, voices_by_time, mean=None):
+    def __init__(self, voices_by_time):
         self.voices_by_time = voices_by_time       # [(start, end, vector)]
-        self.mean = mean
 
     def embed(self, audio):
         t = self._t
@@ -35,105 +36,122 @@ class FakeEmbedder:
         return voices.Embedder.centroid(self, members)
 
 
-def _refine(turns, by_time):
-    import voices
-    emb = FakeEmbedder(by_time)
-    real = voices._members
+A, B = [1, 0, 0, 0], [0, 1, 0, 0]
 
-    def members(audio, turns_, embedder, label):     # tell the fake embedder which turn it embeds
+
+def test_speaker_vectors_average_each_speakers_turns(monkeypatch):
+    import voices
+    emb = FakeEmbedder([(0, 10, A), (10, 20, B), (20, 30, [0.9, 0.1, 0, 0])])
+
+    def members(audio, turns, embedder, label):     # tell the fake embedder which turn it embeds
         out = []
-        for s, e, k in turns_:
+        for s, e, k in turns:
             if k == label and e - s >= voices.MIN_TURN:
                 embedder._t = s
                 out.append((embedder.embed(None), e - s))
         return out
 
-    voices._members = members
-    try:
-        return voices.refine(np.zeros(16000 * 200, np.float32), turns, emb)
-    finally:
-        voices._members = real
-
-
-A, B = [1, 0, 0, 0], [0, 1, 0, 0]
-
-
-def test_refine_merges_a_speaker_split_in_two():
-    turns = [(0, 10, 0), (10, 20, 1), (20, 30, 2), (30, 40, 1)]
-    by_time = [(0, 10, A), (10, 20, B), (20, 30, [0.97, 0.05, 0, 0]), (30, 40, B)]   # 2 = same voice as 0
-    new, vecs = _refine(turns, by_time)
-    assert {k for _, _, k in new} == {0, 1}
-    assert [k for _, _, k in new] == [0, 1, 0, 1]
+    monkeypatch.setattr(voices, "_members", members)
+    vecs = voices.speaker_vectors(np.zeros(16000 * 30, np.float32), [(0, 10, 0), (10, 20, 1), (20, 30, 0)], emb)
     assert set(vecs) == {0, 1}
+    assert vecs[0][1] == 20 and vecs[1][1] == 10
+    assert vecs[0][0][0] > 0.95 and abs(np.linalg.norm(vecs[0][0]) - 1) < 1e-9
 
 
-def test_refine_keeps_different_speakers_apart():
-    turns = [(0, 10, 0), (10, 20, 1), (20, 30, 0)]
-    new, _ = _refine(turns, [(0, 10, A), (10, 20, B), (20, 30, A)])
-    assert [k for _, _, k in new] == [0, 1, 0]
+# ----------------------------------------------------------------------------- diarize.py
+
+def _voices(rng, n_per, dims=32, noise=0.15):
+    """Voiceprints of len(n_per) people (random, nearly orthogonal directions) with some noise."""
+    centers = rng.standard_normal((len(n_per), dims))
+    x, y = [], []
+    for k, n in enumerate(n_per):
+        x.append(centers[k] + noise * np.linalg.norm(centers[k]) * rng.standard_normal((n, dims)) / np.sqrt(dims))
+        y += [k] * n
+    return np.vstack(x), np.array(y)
 
 
-def test_refine_absorbs_a_tiny_fragment_into_the_closest_voice():
-    turns = [(0, 60, 0), (60, 61.2, 5), (61.2, 120, 1)]
-    by_time = [(0, 60, A), (60, 61.2, [0.6, 0.4, 0, 0]), (61.2, 120, B)]
-    new, vecs = _refine(turns, by_time)
-    assert [k for _, _, k in new] == [0, 0, 1]
-    assert 5 not in vecs
+def _same_partition(a, b):
+    return len(set(zip(a, b))) == len(set(a)) == len(set(b))
 
 
-@pytest.mark.parametrize("c_secs, expected", [(10, 3), (3, 2)])
-def test_a_short_distinct_voice_stays_a_speaker_but_a_blip_does_not(c_secs, expected):
-    """A lecture: someone asks a short question (under 2% of the speech) in a voice unlike anyone else's."""
-    C = [0, 0, 1, 0]
-    half = c_secs / 2
-    turns = ([(i * 10, i * 10 + 10, 0) for i in range(60)] + [(600, 600 + half, 2), (610, 610 + half, 2)]
-             + [(620 + i * 10, 630 + i * 10, 1) for i in range(10)])
-    by_time = [(0, 600, A), (600, 620, C), (620, 720, B)]
-    new, vecs = _refine(turns, by_time)
-    assert len(vecs) == expected
+def test_cluster_finds_the_people_and_folds_small_clusters_into_large_ones():
+    import diarize
+    rng = np.random.default_rng(0)
+    x, y = _voices(rng, [80, 60, 40])
+    assert _same_partition(diarize.cluster(x), y)
+    # a few stray voiceprints (fewer than MIN_CLUSTER_SIZE) do not become a speaker of their own
+    stray, _ = _voices(rng, [3])
+    labels = diarize.cluster(np.vstack([x, stray]))
+    assert len(set(labels)) == 3
 
 
-def _phone_like(seed, same_person):
-    """Two clusters of 8 two-second turns whose centroids are ~0.75 alike, as in a phone call. Two people:
-    each turn sounds like its own speaker. One person: the turns vary a lot and the split is arbitrary."""
-    rng = np.random.default_rng(seed)
-    common = np.zeros(16); common[0] = 1.0
-    p = common + 0.6 * np.eye(16)[1]
-    q = common + 0.6 * np.eye(16)[2]
-    turns, by_time = [], []
-    for i in range(16):
-        k = i % 2
-        if same_person:
-            v = p + 0.45 * rng.standard_normal(16) + (0.3 * np.eye(16)[2] if k else 0)
-        else:
-            v = (p if k == 0 else q) + 0.05 * rng.standard_normal(16)
-        turns.append((2 * i, 2 * i + 2, k))
-        by_time.append((2 * i, 2 * i + 2, v))
-    return turns, by_time
+def test_cluster_can_be_asked_for_a_number_of_speakers():
+    import diarize
+    x, y = _voices(np.random.default_rng(1), [50, 50, 50])
+    assert len(set(diarize.cluster(x, num_clusters=2))) == 2
+    assert _same_partition(diarize.cluster(x, num_clusters=3), y)
 
 
-def _centroid_sim(turns, by_time):
-    c = [np.mean([v / np.linalg.norm(v) for (s, e, k), (_, _, v) in zip(turns, by_time) if k == j], axis=0)
-         for j in (0, 1)]
-    return float(c[0] @ c[1] / np.linalg.norm(c[0]) / np.linalg.norm(c[1]))
+def test_long_recordings_are_preclustered_with_the_same_result():
+    import diarize
+    x, y = _voices(np.random.default_rng(2), [diarize.PRECLUSTER_ABOVE // 2 + 50] * 2, noise=0.05)
+    assert len(x) > diarize.PRECLUSTER_ABOVE
+    assert _same_partition(diarize.cluster(x), y)
 
 
-def test_refine_separates_similar_but_consistent_voices_like_a_phone_call():
-    turns, by_time = _phone_like(1, same_person=False)
+class _FakeSeg:
+    window, step, frame_shift, receptive = 160_000, 16_000, 270, 991
+
+
+def test_assign_turns_window_speakers_into_timed_turns():
+    """30 s: A talks for the first 15 s, B for the rest; each 10 s window sees them as local speakers 0/1."""
+    import diarize
+    seg, frames = _FakeSeg(), 589
+    starts = list(range(0, 30 * 16000 - seg.window + 1, seg.step))
+    binary = np.zeros((len(starts), frames, 3), np.float32)
+    emb = np.full((len(starts), 3, 4), np.nan)
+    t_frame = (np.arange(frames) * seg.frame_shift + seg.receptive / 2) / 16000
+    for c, s0 in enumerate(starts):
+        t = s0 / 16000 + t_frame
+        binary[c, t < 15, 0] = 1
+        binary[c, t >= 15, 1] = 1
+        if binary[c, :, 0].any():
+            emb[c, 0] = A
+        if binary[c, :, 1].any():
+            emb[c, 1] = B
+    turns = diarize.assign(binary, emb, seg, 30 * 16000, min_cluster=1)
+    assert len({k for *_, k in turns}) == 2
+    first = [t for t in turns if t[2] == turns[0][2]]
+    assert abs(first[0][0]) < 0.2 and abs(first[-1][1] - 15) < 0.2
+    assert abs(max(e for _, e, _ in turns) - 30) < 0.3
+
+
+@pytest.mark.skipif(not (MODELS / "wespeaker.onnx").exists(), reason="models not downloaded")
+def test_voiceprints_match_the_original_network():
+    """The pre-pooling tensor + our pooling and linear layer reproduce the full ONNX model."""
+    import onnxruntime as ort
+    import diarize
+    rng = np.random.default_rng(3)
+    wav = (0.1 * rng.standard_normal(16000 * 3)).astype(np.float32)
+    vp = diarize.Voiceprints(MODELS / "wespeaker.onnx", 2)
+    f = diarize.fbank(wav)
+    assert f.shape == (298, 80)
+    f -= f.mean(axis=0)
+    full = ort.InferenceSession(str(MODELS / "wespeaker.onnx"), providers=["CPUExecutionProvider"])
+    ref = full.run(None, {full.get_inputs()[0].name: f[None]})[0][0]
+    assert np.abs(vp.embed(wav) - ref).max() < 1e-3
+    seq = vp.frames(wav)
+    assert np.allclose(vp.pool(seq, np.ones(589)), vp.pool(seq), atol=1e-3)   # uniform weights = no weights
+
+
+def test_old_voiceprints_are_never_compared(tmp_path):
     import voices
-    assert voices.MERGE_SIM <= _centroid_sim(turns, by_time) < voices.SURE_SIM   # the case the test is about
-    new, vecs = _refine(turns, by_time)
-    assert len(vecs) == 2
-    assert {k for _, _, k in new[0::2]} != {k for _, _, k in new[1::2]}
-
-
-@pytest.mark.parametrize("seed", [1, 2, 3])
-def test_refine_keeps_one_variable_voice_as_one_speaker(seed):
-    turns, by_time = _phone_like(seed, same_person=True)
-    import voices
-    assert voices.MERGE_SIM <= _centroid_sim(turns, by_time) < voices.SURE_SIM
-    new, vecs = _refine(turns, by_time)
-    assert len(vecs) == 1
+    path = tmp_path / "voices.json"
+    voices.save_profiles({"ישן": {"v": [1, 0, 0], "sec": 30},
+                          "חדש": {"v": [1, 0, 0], "sec": 30, "m": voices.VOICE_MODEL}}, path)
+    assert set(voices.load_profiles(path)) == {"חדש"}
+    assert not voices.is_current({"v": [1, 0], "sec": 3})
+    assert voices.learn({}, "x", [1, 0], 5)["x"]["m"] == voices.VOICE_MODEL
 
 
 def test_identify_is_one_to_one_and_needs_a_close_voice():
@@ -159,12 +177,14 @@ def test_learn_accumulates_a_running_average(tmp_path):
 
 # ----------------------------------------------------------------------------- app integration
 
-def _item_with_voice(root, title, vector, name="דובר 1"):
+def _item_with_voice(root, title, vector, name="דובר 1", m=None):
     import library as lib
+    import voices
+    m = m or voices.VOICE_MODEL
     it = lib.Library(root).create("mic", title=title)
     it.data.update(status="done", speakers={"1": name},
                    segments=[{"start": 0, "end": 3, "speaker": "1", "text": "שלום"}],
-                   voiceprints={"1": {"v": list(vector), "sec": 30}})
+                   voiceprints={"1": {"v": list(vector), "sec": 30, "m": m}})
     it.save()
     return it
 
@@ -176,6 +196,7 @@ def test_naming_a_speaker_learns_the_voice_and_names_it_elsewhere(make_window, w
     a = _item_with_voice(root, "פגישה א", [1, 0, 0, 0])
     b = _item_with_voice(root, "פגישה ב", [0.95, 0.1, 0, 0])      # same person
     c = _item_with_voice(root, "פגישה ג", [0, 1, 0, 0])           # someone else
+    d = _item_with_voice(root, "פגישה ד", [1, 0, 0, 0], m="old")  # same voice, from an older version
     w = make_window(mic=fakes.REALTEK_MIC)
     assert wait_until(lambda: not w.processor.is_busy(), 5)
     w.select_item(a.id)
@@ -186,21 +207,53 @@ def test_naming_a_speaker_learns_the_voice_and_names_it_elsewhere(make_window, w
     assert "עומרי" in voices.load_profiles()
     assert w.items[b.id].speakers["1"] == "עומרי", "the same voice in another recording was not named"
     assert w.items[c.id].speakers["1"] == "דובר 1"
+    assert w.items[d.id].speakers["1"] == "דובר 1", "an older kind of voiceprint was compared"
     assert "הקלטה נוספת אחת" in msgbox.texts()
     assert w.show_speakers(w.items[a.id]), "a named single speaker is shown in the transcript"
+
+
+def test_giving_a_speaker_the_name_of_another_merges_them(make_window, world, msgbox, monkeypatch):
+    """The app split one person in two: naming one like the other (and confirming) makes them one speaker."""
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+    import library as lib
+    import voices
+    root = Path(os.environ["HEBTRANSCRIBE_ROOT"])
+    it = lib.Library(root).create("mic", title="פגישה")
+    m = voices.VOICE_MODEL
+    it.data.update(status="done", speakers={"1": "דנה", "2": "דובר 2", "3": "דובר 3"},
+                   segments=[{"start": 0, "end": 2, "speaker": "1", "text": "שלום"},
+                             {"start": 2.5, "end": 4, "speaker": "2", "text": "מה נשמע"},
+                             {"start": 5, "end": 6, "speaker": "3", "text": "טוב"}],
+                   voiceprints={"1": {"v": [1, 0, 0], "sec": 10, "m": m}, "2": {"v": [0, 1, 0], "sec": 10, "m": m}})
+    it.save()
+    w = make_window(mic=fakes.REALTEK_MIC)
+    assert wait_until(lambda: not w.processor.is_busy(), 5)
+    w.select_item(it.id)
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *x, **k: ("דנה", True)))
+    msgbox.answer = QMessageBox.No
+    w.rename_speaker("2")
+    assert w.items[it.id].speakers == {"1": "דנה", "2": "דובר 2", "3": "דובר 3"}, "declined: nothing changes"
+    msgbox.answer = QMessageBox.Yes
+    w.rename_speaker("2")
+    item = w.items[it.id]
+    assert item.speakers == {"1": "דנה", "3": "דובר 3"}
+    assert [(s["speaker"], s["text"]) for s in item.segments] == [("1", "שלום מה נשמע"), ("3", "טוב")]
+    vp = item.data["voiceprints"]["1"]
+    assert vp["sec"] == 20 and abs(vp["v"][0] - vp["v"][1]) < 1e-6
+    assert "2" not in item.data["voiceprints"]
 
 
 def test_new_transcription_receives_saved_voices_and_keeps_voiceprints(make_window, world, msgbox, monkeypatch, tmp_path):
     import engine
     import voices
-    voices.save_profiles({"עומרי": {"v": [1, 0, 0, 0], "sec": 60}})
+    voices.save_profiles({"עומרי": {"v": [1, 0, 0, 0], "sec": 60, "m": voices.VOICE_MODEL}})
     seen = {}
     real = engine.Engine.process
 
     def proc(self, *a, **k):
         seen["profiles"] = dict(self.profiles)
         segs, spk, dur = real(self, *a, **k)
-        self.last_voiceprints = {"0": {"v": [1, 0, 0, 0], "sec": 2.0}}
+        self.last_voiceprints = {"0": {"v": [1, 0, 0, 0], "sec": 2.0, "m": voices.VOICE_MODEL}}
         return segs, {"0": "עומרי"}, dur
 
     monkeypatch.setattr(engine.Engine, "process", proc)

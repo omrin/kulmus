@@ -9,6 +9,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 from PySide6.QtCore import QPoint, QRect, QSettings, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -27,7 +28,7 @@ from recorder import RATE, Recorder, find_input, friendly_error, list_inputs
 from worker import JobError, make_backend
 
 APP_NAME = "קולמוס"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 REPO_URL = "https://github.com/omrin/kulmus"
 APP_ID = "kulmus.app"                   # Windows AppUserModelID
 AUDIO_EXT = "*.wav *.mp3 *.m4a *.ogg *.opus *.flac *.aac *.wma *.webm *.mp4 *.mkv *.mov *.amr *.3gp"
@@ -133,6 +134,30 @@ def speaker_color(key: str) -> str:
 
 def open_path(path):
     QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+
+def merge_speakers(item, gone, keep):
+    """Makes speaker `gone` part of speaker `keep` in an item: its text, name and voiceprint."""
+    merged = []
+    for s in item.segments:
+        s = dict(s, speaker=keep if s["speaker"] == gone else s["speaker"])
+        if merged and merged[-1]["speaker"] == s["speaker"] and s["start"] - merged[-1]["end"] < 3.0:
+            merged[-1]["text"] = f'{merged[-1]["text"]} {s["text"]}'.strip()
+            merged[-1]["end"] = s["end"]
+        else:
+            merged.append(s)
+    item.data["segments"] = merged
+    item.speakers.pop(gone, None)
+    item.data.get("custom_names", {}).pop(gone, None)
+    vps = item.data.get("voiceprints") or {}
+    a, b = vps.get(keep), vps.pop(gone, None)
+    if voices.is_current(a) and voices.is_current(b):
+        sa, sb = float(a.get("sec") or 1), float(b.get("sec") or 1)
+        v = np.asarray(a["v"]) * sa + np.asarray(b["v"]) * sb
+        v = v / (np.linalg.norm(v) or 1.0)
+        vps[keep] = {"v": [round(float(x), 5) for x in v], "sec": round(sa + sb, 1), "m": voices.VOICE_MODEL}
+    elif a is None and b is not None:
+        vps[keep] = b
 
 
 def os_description() -> str:
@@ -1419,13 +1444,19 @@ class MainWindow(QMainWindow):
         item = self.current
         old = item.speakers.get(key, "")
         name, ok = QInputDialog.getText(
-            self, "שם הדובר", "שם (האפליקציה תזהה את הקול הזה גם בהקלטות הבאות):", text=old)
+            self, "שם הדובר", "שם (האפליקציה תזהה את הקול הזה גם בהקלטות הבאות).\n"
+                              "אותו אדם מופיע כשני דוברים? כתבו את השם של הדובר השני והם יאוחדו:", text=old)
         name = name.strip()
         if not ok or not name or name == old:
             return
-        for k, v in item.speakers.items():          # the same name on two speakers = they are one person
-            if k != key and v == name:
-                item.speakers[k] = old or v
+        other = next((k for k, v in item.speakers.items() if k != key and v == name), None)
+        if other is not None:
+            # the name is already on another speaker of this recording: one person the app split in two
+            if QMessageBox.question(self, APP_NAME, f"„{name}” כבר מופיע בהקלטה הזו.\n"
+                                    "לאחד את שני הדוברים לדובר אחד?") != QMessageBox.Yes:
+                return
+            merge_speakers(item, key, other)
+            key = other
         item.speakers[key] = name
         item.data.setdefault("custom_names", {})[key] = name
         item.save()
@@ -1433,7 +1464,7 @@ class MainWindow(QMainWindow):
         self.render_transcript(keep_scroll=True)
         self.refresh_row(item.id)
         vp = (item.data.get("voiceprints") or {}).get(key)
-        if vp and not voices.DEFAULT_NAME.match(name):
+        if voices.is_current(vp) and not voices.DEFAULT_NAME.match(name):
             profiles = voices.load_profiles()
             voices.learn(profiles, name, vp["v"], float(vp.get("sec", 0)) or 5.0)
             try:
@@ -1456,7 +1487,7 @@ class MainWindow(QMainWindow):
             custom = it.data.get("custom_names", {})
             for key, vp in (it.data.get("voiceprints") or {}).items():
                 cur = it.speakers.get(key, "")
-                if key == ME or key in custom or not voices.DEFAULT_NAME.match(cur):
+                if key == ME or key in custom or not voices.DEFAULT_NAME.match(cur) or not voices.is_current(vp):
                     continue
                 sim = voices.similarity(vp["v"], profile)
                 if sim >= voices.ID_SIM and (best is None or sim > best[0]):

@@ -1,13 +1,11 @@
-"""Speaker voiceprints: refining diarization clusters and recognising known voices by name.
+"""Speaker voiceprints and recognising known voices by name.
 
-Raw WeSpeaker embeddings are all very similar to each other (cosine 0.75-0.97 between different
-people). Subtracting the mean embedding of many voices ("centering") and averaging over all of a
-speaker's turns separates them well: on real Hebrew meetings the same person in different parts of a
-conversation scores 0.55-0.9, different people mostly below 0.3. Those speaker-level vectors are used to
-
-  * merge clusters the diarizer split too finely (it is run with a permissive threshold),
-  * absorb tiny fragments into the closest speaker,
-  * recognise people the user has named before (profiles stored locally, never uploaded).
+Voiceprints are WeSpeaker ResNet34 embeddings computed the way pyannote computes them (diarize.Voiceprints): the
+mean of the input features is removed, so the recording channel (phone, microphone) does not dominate the voice.
+Measured on Hebrew recordings labelled by transcribe.ivrit.ai: the same speaker in two halves of a recording
+scores a median of 0.93, different speakers of one recording at most 0.43, one person recurring across
+recordings 0.85-0.9. Names the user gives are kept as profiles (stored locally, never uploaded) and recognised
+in later recordings.
 """
 
 import json
@@ -20,67 +18,31 @@ import numpy as np
 
 MODELS_DIR = Path(__file__).resolve().parent / "models"
 EMB_MODEL = MODELS_DIR / "wespeaker.onnx"
-MEAN_FILE = MODELS_DIR / "wespeaker_mean.npy"
 SR = 16_000
-MERGE_SIM = 0.5        # speaker-level similarity above which two clusters are the same person
-ID_SIM = 0.5           # similarity to a saved voice needed to put its name on a speaker
-MIN_TURN = 0.8         # s: shorter turns are too short for a reliable embedding
+VOICE_MODEL = "wespeaker-r34-cmn"  # kind of voiceprint; older kinds (before 1.0.3) cannot be compared to it
+ID_SIM = 0.6           # similarity to a saved voice needed to put its name on a speaker
+MIN_TURN = 0.8         # s: shorter turns are too short for a reliable voiceprint
 MAX_PER_SPEAKER = 120  # s of audio embedded per speaker (enough for a stable voiceprint)
-TINY = 2.0             # s: a cluster with less speech than this is a fragment ...
-TINY_SHARE = 0.02      # ... and so is one with under 2% of all speech (in long recordings)
-FRAGMENT_SIM = 0.3     # ... but a fragment with FRAGMENT_SECS of speech, less similar than this to every
-FRAGMENT_SECS = 8.0    #     real speaker, is its own speaker (shorter ones are mostly laughs, noise, overlaps)
-# Phone calls and other compressed audio make every voice sound alike (two people can reach 0.75), so a
-# similarity above MERGE_SIM is only trusted when the clusters cannot be told apart segment by segment:
-SURE_SIM = 0.9         # this similar -> the same person, no further test
-SEPARABLE = 2.5        # mean d' between the diarizer's original clusters of the two groups that marks two people
-MIN_SEP_SEGS = 5       # segments a cluster needs for the separability test
 
 DEFAULT_NAME = re.compile(r"^(דובר|משתתף)( \d+)?$")
 
 
 class Embedder:
-    def __init__(self, threads: int = 4):
-        import sherpa_onnx
-        self.ext = sherpa_onnx.SpeakerEmbeddingExtractor(
-            sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(EMB_MODEL), num_threads=threads))
-        self.mean = np.load(MEAN_FILE) if MEAN_FILE.exists() else None
+    def __init__(self, threads: int = 4, voiceprints=None):
+        if voiceprints is None:
+            import diarize
+            voiceprints = diarize.Voiceprints(EMB_MODEL, threads)
+        self.vp = voiceprints
 
     def embed(self, audio: np.ndarray) -> np.ndarray:
-        s = self.ext.create_stream()
-        s.accept_waveform(SR, audio)
-        s.input_finished()
-        v = np.asarray(self.ext.compute(s), dtype=np.float64)
-        return v / (np.linalg.norm(v) or 1.0)
+        return self.center(self.vp.embed(audio))
 
     def center(self, v: np.ndarray) -> np.ndarray:
-        if self.mean is not None:
-            v = v - self.mean
         return v / (np.linalg.norm(v) or 1.0)
 
     def centroid(self, members) -> np.ndarray:
-        """members: [(raw embedding, weight)] -> centered, unit-length speaker vector."""
+        """members: [(embedding, weight)] -> unit-length speaker vector."""
         return self.center(np.average(np.array([m for m, _ in members]), axis=0, weights=[w for _, w in members]))
-
-
-def separability(ma, mb, embedder) -> float:
-    """How clearly two clusters are different voices: d' of each segment's margin between its own cluster
-    (leave-one-out) and the other cluster. Same person split in two: ~0.5-1.5; two people: 2-6."""
-    margins = []
-    for own, other in ((ma, mb), (mb, ma)):
-        oc = embedder.centroid(other)
-        xs = np.array([x for x, _ in own])
-        ws = np.array([w for _, w in own])
-        tot, wsum = (ws[:, None] * xs).sum(axis=0), ws.sum()
-        for x, w in own:
-            if wsum - w <= 0:
-                continue
-            cx = embedder.center(x)
-            margins.append(float(cx @ embedder.center((tot - w * x) / (wsum - w)) - cx @ oc))
-    if len(margins) < 2:
-        return 0.0
-    m = np.array(margins)
-    return float(m.mean() / (m.std() + 1e-9))
 
 
 def _members(audio, turns, embedder, label):
@@ -94,116 +56,19 @@ def _members(audio, turns, embedder, label):
     return out
 
 
-def refine(audio: np.ndarray, turns, embedder: Embedder, fixed: bool = False):
-    """Merges over-split clusters and absorbs fragments.
-
-    turns: [(start, end, label)]. Returns (new_turns, {label: (vector, seconds)}). A fragment without a
-    usable embedding joins the speaker who talks closest to it in time.
-    fixed: the user gave the number of speakers -> keep the diarizer's clusters, only compute vectors."""
-    labels = sorted({k for _, _, k in turns})
-    secs = {k: sum(e - s for s, e, kk in turns if kk == k) for k in labels}
-    mem = {k: _members(audio, turns, embedder, k) for k in labels}
-    alias = {k: k for k in labels}
-
-    def root(k):
-        while alias[k] != k:
-            k = alias[k]
-        return k
-
-    def vec(k):
-        return embedder.centroid(mem[k]) if mem[k] else None
-
-    if not fixed:
-        # The separability of two groups is the average over the diarizer's original clusters in them:
-        # testing the merged groups directly dilutes it, because a grown group mixes sub-clusters.
-        group = {k: [k] for k in labels}
-        orig_secs = dict(secs)
-        testable = [k for k in labels if len(mem[k]) >= MIN_SEP_SEGS]
-        mem_orig = {k: list(mem[k]) for k in labels}
-        dp = {}
-
-        def pair_dprime(i, j):
-            key = frozenset((i, j))
-            if key not in dp:
-                dp[key] = separability(mem_orig[i], mem_orig[j], embedder)
-            return dp[key]
-
-        def apart_groups(a, b):
-            pairs = [(i, j) for i in group[a] for j in group[b] if i in testable and j in testable]
-            if not pairs:
-                return False
-            w = np.array([orig_secs[i] * orig_secs[j] for i, j in pairs])
-            d = np.array([pair_dprime(i, j) for i, j in pairs])
-            return float((w * d).sum() / w.sum()) >= SEPARABLE
-
-        apart = set()                    # pairs found to be different people (until one of them changes)
-        while True:
-            live = [k for k in labels if root(k) == k and mem[k]]
-            vs = {k: vec(k) for k in live}
-            cands = sorted(((float(vs[a] @ vs[b]), a, b) for i, a in enumerate(live) for b in live[i + 1:]
-                            if frozenset((a, b)) not in apart), reverse=True)
-            pair = None
-            for sim, a, b in cands:
-                if sim < MERGE_SIM:
-                    break
-                if sim < SURE_SIM and apart_groups(a, b):
-                    apart.add(frozenset((a, b)))
-                    continue
-                pair = (a, b)
-                break
-            if pair is None:
-                break
-            a, b = pair
-            apart = {p for p in apart if a not in p and b not in p}
-            keep, gone = (a, b) if secs[a] >= secs[b] else (b, a)
-            alias[gone] = keep
-            group[keep] += group[gone]
-            mem[keep] += mem[gone]
-            secs[keep] += secs[gone]
-            mem[gone], secs[gone] = [], 0.0
-        # fragments: tiny clusters go to the most similar real speaker (or to a neighbour if unusable)
-        total = sum(secs[k] for k in labels if root(k) == k) or 1.0
-        live = [k for k in labels if root(k) == k]
-        big = [k for k in live if secs[k] >= max(TINY, TINY_SHARE * total)]
-        if not big and live:
-            big = [max(live, key=lambda k: secs[k])]
-        def nearest_in_time(k):
-            mine = [((s + e) / 2) for s, e, kk in turns if root(kk) == k]
-            best_b, best_d = big[0], float("inf")
-            for s, e, kk in turns:
-                b = root(kk)
-                if b in big:
-                    d = min(abs((s + e) / 2 - m) for m in mine)
-                    if d < best_d:
-                        best_b, best_d = b, d
-            return best_b
-
-        for k in live:
-            if k in big:
-                continue
-            v = vec(k)
-            cands = [b for b in big if mem[b]]
-            if v is None or not cands:
-                alias[k] = nearest_in_time(k)
-                continue
-            best = max(cands, key=lambda b: float(v @ vec(b)))
-            # someone who spoke briefly (a question from the audience) but sounds like nobody else stays a speaker
-            if secs[k] >= FRAGMENT_SECS and float(v @ vec(best)) < FRAGMENT_SIM:
-                continue
-            alias[k] = best
-
-    def final(k):
-        while k is not None and alias.get(k, k) != k:
-            k = alias[k]
-        return k
-
-    new_turns = [(s, e, final(k)) for s, e, k in turns]
+def speaker_vectors(audio: np.ndarray, turns, embedder: Embedder) -> dict:
+    """{label: (voiceprint, seconds of speech)} for the speakers of diarization turns [(start, end, label)]."""
     vectors = {}
-    for k in {k for _, _, k in new_turns if k is not None}:
-        v = vec(k)
-        if v is not None:
-            vectors[k] = (v, secs[k])
-    return new_turns, vectors
+    for k in sorted({k for _, _, k in turns}):
+        m = _members(audio, turns, embedder, k)
+        if m:
+            vectors[k] = (embedder.centroid(m), sum(e - s for s, e, kk in turns if kk == k))
+    return vectors
+
+
+def is_current(voiceprint) -> bool:
+    """A stored voiceprint ({"v", "sec", "m"}) of the kind this version computes."""
+    return isinstance(voiceprint, dict) and "v" in voiceprint and voiceprint.get("m") == VOICE_MODEL
 
 
 def voice_of_spans(audio, spans, embedder):
@@ -243,7 +108,7 @@ def load_profiles(path: Path | None = None) -> dict:
     path = path or profiles_path()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return {n: p for n, p in data.items() if isinstance(p, dict) and "v" in p}
+        return {n: p for n, p in data.items() if is_current(p)}       # older voices cannot be compared
     except (OSError, ValueError):
         return {}
 
@@ -267,7 +132,7 @@ def learn(profiles: dict, name: str, vector, seconds: float, cap: float = 600.0)
     else:
         c, sec = v, seconds
     c = c / (np.linalg.norm(c) or 1.0)
-    profiles[name] = {"v": [round(float(x), 5) for x in c], "sec": round(sec, 1)}
+    profiles[name] = {"v": [round(float(x), 5) for x in c], "sec": round(sec, 1), "m": VOICE_MODEL}
     return profiles
 
 

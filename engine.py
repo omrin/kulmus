@@ -1,4 +1,4 @@
-"""Transcription (ivrit.ai whisper via faster-whisper) + speaker diarization (sherpa-onnx)."""
+"""Transcription (ivrit.ai whisper via faster-whisper) + speaker diarization (pyannote 3.1 pipeline, diarize.py)."""
 
 import os
 import threading
@@ -126,6 +126,7 @@ class Engine:
     def __init__(self):
         self._whisper = None
         self._embedder = None
+        self._segmenter = None
         self._lock = threading.Lock()
         self.profiles: dict = {}          # saved voices {name: {"v": [...], "sec": s}} for this job
         self.last_voiceprints: dict = {}  # {speaker key: {"v": [...], "sec": s}} of the last job
@@ -192,29 +193,15 @@ class Engine:
         finally:
             done.set()
 
-    @staticmethod
-    def diarize(audio: np.ndarray, num_speakers: int, progress=None, cancelled=lambda: False, threshold=0.5):
-        """Returns [(start, end, speaker_int)] sorted by start."""
-        import sherpa_onnx
-        cfg = sherpa_onnx.OfflineSpeakerDiarizationConfig(
-            segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
-                pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(SEG_MODEL)),
-                num_threads=THREADS),
-            embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(EMB_MODEL), num_threads=THREADS),
-            clustering=sherpa_onnx.FastClusteringConfig(
-                num_clusters=num_speakers if num_speakers > 0 else -1, threshold=threshold),
-            min_duration_on=0.3, min_duration_off=0.5)
-        sd = sherpa_onnx.OfflineSpeakerDiarization(cfg)
-
-        def cb(done, total):
-            if progress and total:
-                progress(done / total)
-            return 1 if cancelled() else 0
-
-        res = sd.process(audio, callback=cb).sort_by_start_time()
-        if cancelled():
+    def diarize(self, audio: np.ndarray, num_speakers: int, progress=None, cancelled=lambda: False):
+        """Returns [(start, end, speaker_int)] sorted by start (pyannote 3.1 pipeline, see diarize.py)."""
+        import diarize
+        if self._segmenter is None:
+            self._segmenter = diarize.Segmenter(SEG_MODEL, THREADS)
+        try:
+            return diarize.diarize(audio, self._segmenter, self.embedder().vp, num_speakers, progress, cancelled)
+        except diarize.Cancelled:
             raise Cancelled()
-        return [(r.start, r.end, r.speaker) for r in res]
 
     # ------------------------------------------------------------------ pipeline
 
@@ -263,7 +250,7 @@ class Engine:
         if is_call:
             # remote speech comes only through the system channel; everything else is the local user
             turns = self.diarize(sys_, num_speakers, diar_progress, cancelled) if len(sys_) > SR else []
-            turns, vectors = voices.refine(sys_, turns, emb, fixed=num_speakers > 0)
+            vectors = voices.speaker_vectors(sys_, turns, emb)
             labels = [_overlap_speaker(a, b, turns) for a, b, _ in words]
             labels = [ME if k is None else str(k) for k in labels]
             vectors = {str(k): v for k, v in vectors.items()}
@@ -277,7 +264,7 @@ class Engine:
                 vectors["0"] = v
         else:
             turns = self.diarize(mix, num_speakers, diar_progress, cancelled)
-            turns, vectors = voices.refine(mix, turns, emb, fixed=num_speakers > 0)
+            vectors = voices.speaker_vectors(mix, turns, emb)
             labels = [_overlap_speaker(a, b, turns) for a, b, _ in words]
             labels = _fill_none(labels)
             vectors = {str(k): v for k, v in vectors.items()}
@@ -290,7 +277,8 @@ class Engine:
         for label, key in mapping.items():
             if label in vectors:
                 v, sec = vectors[label]
-                self.last_voiceprints[key] = {"v": [round(float(x), 5) for x in v], "sec": round(sec, 1)}
+                self.last_voiceprints[key] = {"v": [round(float(x), 5) for x in v], "sec": round(sec, 1),
+                                              "m": voices.VOICE_MODEL}
             if label in names:
                 speakers[key] = names[label]
         on_progress(1.0, "")

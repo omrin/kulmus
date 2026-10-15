@@ -5,7 +5,6 @@ build/
 dist/
 packaging/Output/
 models/*
-!models/wespeaker_mean.npy
 *.wav
 *.part
 selftest.json

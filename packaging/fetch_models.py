@@ -1,5 +1,5 @@
 """Downloads the small speaker-separation models into models/ (the 1.6 GB transcription model is
-downloaded by the app itself on first run). models/wespeaker_mean.npy is part of the repository."""
+downloaded by the app itself on first run)."""
 
 import tarfile
 import urllib.request

@@ -1,6 +1,6 @@
 """Runs the heavy work (transcription, diarization, audio encoding) away from the UI process.
 
-sherpa-onnx's diarization holds the Python GIL for its whole run (seconds to minutes). In the UI
+Transcription and diarization keep the Python GIL busy for long stretches (seconds to minutes). In the UI
 process that froze the window and starved the recorder's audio callback, so audio recorded meanwhile
 was lost. Everything heavy therefore runs in a child process at below-normal priority, which also
 makes "cancel" and "quit" instant: the child is simply killed.

@@ -6,8 +6,8 @@
 | [OpenAI Whisper](https://github.com/openai/whisper) | base model architecture | MIT |
 | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) / [CTranslate2](https://github.com/OpenNMT/CTranslate2) | inference | MIT |
 | Silero VAD (bundled with faster-whisper) | voice activity detection | MIT |
-| [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | speaker diarization runtime | Apache-2.0 |
-| [pyannote segmentation 3.0](https://huggingface.co/pyannote/segmentation-3.0) (ONNX export by sherpa-onnx) | speaker turn segmentation | MIT |
+| [pyannote.audio 3.1](https://github.com/pyannote/pyannote-audio) speaker-diarization pipeline (algorithm re-implemented in `diarize.py`) | speaker diarization | MIT |
+| [pyannote segmentation 3.0](https://huggingface.co/pyannote/segmentation-3.0) (ONNX export by [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), Apache-2.0) | speaker turn segmentation | MIT |
 | [WeSpeaker ResNet34 (VoxCeleb)](https://github.com/wenet-e2e/wespeaker) | speaker embeddings | code Apache-2.0; pretrained weights [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) (they follow the VoxCeleb dataset license) — © WeSpeaker authors |
 | [ONNX Runtime](https://github.com/microsoft/onnxruntime) | model runtime | MIT |
 | [Qt / PySide6](https://www.qt.io/qt-for-python) | user interface, audio playback | LGPL-3.0 (dynamically linked, unmodified) |
@@ -17,9 +17,6 @@
 | [NumPy](https://numpy.org) | audio processing | BSD-3-Clause |
 | [Hugging Face Hub](https://github.com/huggingface/huggingface_hub) | model download | Apache-2.0 |
 | [Feather Icons](https://feathericons.com) (shapes) | icons | MIT |
-
-`models/wespeaker_mean.npy` is the average WeSpeaker embedding of a set of Hebrew speech recordings, used to
-normalise voiceprints; it contains no audio and cannot be turned back into speech.
 
 The LGPL libraries are used as unmodified shared libraries; you may replace them in an installed copy
 (e.g. the Qt or FFmpeg libraries inside the application folder) with compatible versions.
