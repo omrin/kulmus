@@ -6,4 +6,5 @@ Comment=Offline Hebrew transcription
 Exec=Kulmus
 Icon=kulmus
 Terminal=false
+StartupWMClass=Kulmus
 Categories=AudioVideo;Audio;Utility;

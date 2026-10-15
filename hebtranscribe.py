@@ -27,8 +27,9 @@ from recorder import RATE, Recorder, find_input, friendly_error, list_inputs
 from worker import JobError, make_backend
 
 APP_NAME = "קולמוס"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 REPO_URL = "https://github.com/omrin/kulmus"
+APP_ID = "kulmus.app"                   # Windows AppUserModelID
 AUDIO_EXT = "*.wav *.mp3 *.m4a *.ogg *.opus *.flac *.aac *.wma *.webm *.mp4 *.mkv *.mov *.amr *.3gp"
 
 # ------------------------------------------------------------------ look & feel
@@ -2064,10 +2065,13 @@ def main():
         return selftest(sys.argv)
     setup_console_fallback()
     if sys.platform == "win32":
+        # must match the AppUserModelID of the shortcuts (installer.iss), or the taskbar shows the running
+        # window apart from the pinned shortcut
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("kulmus.app")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    app.setDesktopFileName("kulmus")              # Linux: ties the window to kulmus.desktop
     app.setWindowIcon(QIcon(str(Path(__file__).resolve().parent / "icon.ico")))
     app.setLayoutDirection(Qt.RightToLeft)
     app.setFont(QFont("Segoe UI", 10))

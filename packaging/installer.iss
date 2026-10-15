@@ -32,9 +32,10 @@ Name: "desktopicon"; Description: "יצירת קיצור דרך בשולחן ה�
 Source: "..\dist\Kulmus\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\קולמוס"; Filename: "{app}\Kulmus.exe"
+; AppUserModelID must match the one the app sets (APP_ID), or the taskbar separates the window from the pin
+Name: "{group}\קולמוס"; Filename: "{app}\Kulmus.exe"; AppUserModelID: "kulmus.app"
 Name: "{group}\הסרת קולמוס"; Filename: "{uninstallexe}"
-Name: "{userdesktop}\קולמוס"; Filename: "{app}\Kulmus.exe"; Tasks: desktopicon
+Name: "{userdesktop}\קולמוס"; Filename: "{app}\Kulmus.exe"; AppUserModelID: "kulmus.app"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\Kulmus.exe"; Description: "הפעלת קולמוס"; Flags: nowait postinstall skipifsilent

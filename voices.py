@@ -28,6 +28,8 @@ MIN_TURN = 0.8         # s: shorter turns are too short for a reliable embedding
 MAX_PER_SPEAKER = 120  # s of audio embedded per speaker (enough for a stable voiceprint)
 TINY = 2.0             # s: a cluster with less speech than this is a fragment ...
 TINY_SHARE = 0.02      # ... and so is one with under 2% of all speech (in long recordings)
+FRAGMENT_SIM = 0.3     # ... but a fragment with FRAGMENT_SECS of speech, less similar than this to every
+FRAGMENT_SECS = 8.0    #     real speaker, is its own speaker (shorter ones are mostly laughs, noise, overlaps)
 # Phone calls and other compressed audio make every voice sound alike (two people can reach 0.75), so a
 # similarity above MERGE_SIM is only trusted when the clusters cannot be told apart segment by segment:
 SURE_SIM = 0.9         # this similar -> the same person, no further test
@@ -181,7 +183,14 @@ def refine(audio: np.ndarray, turns, embedder: Embedder, fixed: bool = False):
                 continue
             v = vec(k)
             cands = [b for b in big if mem[b]]
-            alias[k] = max(cands, key=lambda b: float(v @ vec(b))) if v is not None and cands else nearest_in_time(k)
+            if v is None or not cands:
+                alias[k] = nearest_in_time(k)
+                continue
+            best = max(cands, key=lambda b: float(v @ vec(b)))
+            # someone who spoke briefly (a question from the audience) but sounds like nobody else stays a speaker
+            if secs[k] >= FRAGMENT_SECS and float(v @ vec(best)) < FRAGMENT_SIM:
+                continue
+            alias[k] = best
 
     def final(k):
         while k is not None and alias.get(k, k) != k:

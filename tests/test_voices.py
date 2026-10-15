@@ -81,6 +81,18 @@ def test_refine_absorbs_a_tiny_fragment_into_the_closest_voice():
     assert 5 not in vecs
 
 
+@pytest.mark.parametrize("c_secs, expected", [(10, 3), (3, 2)])
+def test_a_short_distinct_voice_stays_a_speaker_but_a_blip_does_not(c_secs, expected):
+    """A lecture: someone asks a short question (under 2% of the speech) in a voice unlike anyone else's."""
+    C = [0, 0, 1, 0]
+    half = c_secs / 2
+    turns = ([(i * 10, i * 10 + 10, 0) for i in range(60)] + [(600, 600 + half, 2), (610, 610 + half, 2)]
+             + [(620 + i * 10, 630 + i * 10, 1) for i in range(10)])
+    by_time = [(0, 600, A), (600, 620, C), (620, 720, B)]
+    new, vecs = _refine(turns, by_time)
+    assert len(vecs) == expected
+
+
 def _phone_like(seed, same_person):
     """Two clusters of 8 two-second turns whose centroids are ~0.75 alike, as in a phone call. Two people:
     each turn sounds like its own speaker. One person: the turns vary a lot and the split is arbitrary."""
