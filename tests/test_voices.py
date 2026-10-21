@@ -265,3 +265,13 @@ def test_new_transcription_receives_saved_voices_and_keeps_voiceprints(make_wind
     assert wait_until(lambda: it.status == "done" and not w.processor.is_busy(), 15)
     assert "עומרי" in seen["profiles"]
     assert it.speakers == {"0": "עומרי"} and it.data["voiceprints"]["0"]["sec"] == 2.0
+
+
+def test_voices_dialog_wraps_the_empty_list_message(make_window, world, msgbox):
+    from PySide6.QtCore import Qt
+    import hebtranscribe as ht
+    w = make_window(mic=fakes.REALTEK_MIC)
+    dlg = ht.VoicesDialog(w)
+    assert dlg.list.count() == 1 and dlg.list.wordWrap()
+    assert dlg.list.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+    dlg.close()

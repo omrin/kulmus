@@ -62,6 +62,27 @@ def test_start_stop_then_second_recording(make_window, world, msgbox, first_mode
     assert not msgbox.kinds("warning", "critical"), msgbox.calls
 
 
+def test_recording_can_be_renamed_while_it_records(make_window, world, msgbox):
+    world.speed = 5
+    w = make_window(mic=fakes.REALTEK_MIC)
+    w.start_recording("mic")
+    item = w.rec_item
+    assert w.rec_name.text() == item.title and w.rec_name.isVisible()
+    w.rec_name.setText("ישיבת צוות")
+    w.rec_name.editingFinished.emit()
+    assert item.title == "ישיבת צוות"
+    assert json.loads((item.folder / "item.json").read_text(encoding="utf-8"))["title"] == "ישיבת צוות"
+    assert wait_until(lambda: w.recorder.seconds >= 1.5, 5)
+    w.rec_name.setText("ישיבת צוות שבועית")      # still typing when the recording is stopped
+    w.stop_recording()
+    assert processed(w, item) and item.status == "done"
+    assert w.items[item.id].title == "ישיבת צוות שבועית"
+    assert json.loads((item.folder / "item.json").read_text(encoding="utf-8"))["title"] == "ישיבת צוות שבועית"
+    w.start_recording("mic")
+    assert w.rec_name.text() == w.rec_item.title != "ישיבת צוות שבועית", "a new recording starts with its own name"
+    w.stop_recording()
+
+
 # ----------------------------------------------------------------------------------- start failures
 
 def test_start_failure_leaves_no_state_and_can_restart(make_window, world, msgbox):

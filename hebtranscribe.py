@@ -28,7 +28,7 @@ from recorder import RATE, Recorder, find_input, friendly_error, list_inputs
 from worker import JobError, make_backend
 
 APP_NAME = "קולמוס"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 REPO_URL = "https://github.com/omrin/kulmus"
 APP_ID = "kulmus.app"                   # Windows AppUserModelID
 AUDIO_EXT = "*.wav *.mp3 *.m4a *.ogg *.opus *.flac *.aac *.wma *.webm *.mp4 *.mkv *.mov *.amr *.3gp"
@@ -70,6 +70,8 @@ QToolButton.icon::menu-indicator {{ image: none; width: 0; }}
 QLineEdit#title {{ font-size: 21px; font-weight: 600; border: none; border-bottom: 1px solid transparent; padding: 2px 0; background: transparent; }}
 QLineEdit#title:hover {{ border-bottom-color: {C_LINE}; }}
 QLineEdit#title:focus {{ border-bottom-color: {C_ACCENT}; }}
+QLineEdit#recName {{ font-size: 17px; font-weight: 600; border: none; border-bottom: 1px solid {C_LINE}; padding: 4px 0; background: transparent; }}
+QLineEdit#recName:focus {{ border-bottom-color: {C_ACCENT}; }}
 #meta, #hint {{ color: {C_MUTED}; }}
 #card {{ background: {C_SIDE}; border-radius: 12px; }}
 QToolButton#play {{ background: {C_ACCENT}; border: none; border-radius: 18px; }}
@@ -632,6 +634,8 @@ class VoicesDialog(QDialog):
         lay.addWidget(hint)
         self.list = QListWidget()
         self.list.setObjectName("voices")
+        self.list.setWordWrap(True)                 # the empty-list message is a whole sentence
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         lay.addWidget(self.list, 1)
         row = QHBoxLayout()
         self.btn_del = button("מחיקת הקול", "secondary")
@@ -1019,6 +1023,14 @@ class MainWindow(QMainWindow):
         self.rec_label.setAlignment(Qt.AlignCenter)
         self.rec_label.setStyleSheet(f"color: {C_RED}; font-weight: 600; font-size: 14px;")
         v.addWidget(self.rec_label)
+        self.rec_name = QLineEdit()             # the recording's name, editable while it records
+        self.rec_name.setObjectName("recName")
+        self.rec_name.setAlignment(Qt.AlignCenter)
+        self.rec_name.setPlaceholderText("שם ההקלטה")
+        self.rec_name.setToolTip("אפשר לשנות את שם ההקלטה גם בזמן ההקלטה")
+        self.rec_name.setFixedWidth(440)
+        self.rec_name.editingFinished.connect(self.rename_recording)
+        v.addWidget(self.rec_name, 0, Qt.AlignHCenter)
         self.rec_time = QLabel("00:00")
         self.rec_time.setObjectName("bigTime")
         self.rec_time.setAlignment(Qt.AlignCenter)
@@ -1507,6 +1519,17 @@ class MainWindow(QMainWindow):
         dlg = VoicesDialog(self)
         dlg.exec()
 
+    def rename_recording(self):
+        item, name = self.rec_item, self.rec_name.text().strip()
+        if item is None or not name or name == item.title:
+            return
+        item.data["title"] = name
+        try:
+            item.save()
+        except OSError:
+            traceback.print_exc()
+        self.refresh_row(item.id)
+
     def rename_item(self):
         item = self.current
         if item and self.title_edit.text().strip() and self.title_edit.text() != item.title:
@@ -1571,6 +1594,7 @@ class MainWindow(QMainWindow):
         self.sys_peak = 0.0
         self._rec_notice = None          # forces the first set_rec_hint() to rewrite the label
         self.rec_label.setText("● מקליט שיחה" if mode == "call" else "● מקליט")
+        self.rec_name.setText(item.title)
         self.rec_time.setText("00:00")
         self.meter_sys.setVisible(mode == "call")
         self.meter_mic.label = "אני" if mode == "call" else "מיקרופון"
@@ -1644,6 +1668,7 @@ class MainWindow(QMainWindow):
         if rec is None:
             return None, None
         self.rec_timer.stop()
+        self.rename_recording()                 # a name still being typed when the recording ends
         self.recorder = self.rec_item = None
         try:
             rec.stop()
