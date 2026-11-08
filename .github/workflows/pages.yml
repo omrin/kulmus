@@ -1,10 +1,11 @@
-# Publishes the download page (site/index.html + site/img) to GitHub Pages: https://omrin.github.io/kulmus/
+# Builds the site (site/build_site.py: home page, guides, sitemap, 404) and publishes it to GitHub Pages:
+# https://omrin.github.io/kulmus/   CHANGELOG.md is included because the home page's "what's new" comes from it.
 name: pages
 
 on:
   push:
     branches: [main]
-    paths: ["site/**", ".github/workflows/pages.yml"]
+    paths: ["site/**", "CHANGELOG.md", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -24,14 +25,10 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Collect the public files
-        run: |
-          mkdir _site
-          cp site/index.html _site/
-          cp -r site/img _site/
-          touch _site/.nojekyll
+      - name: Build the site
+        run: python3 site/build_site.py
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: site/_site
       - id: deployment
         uses: actions/deploy-pages@v4

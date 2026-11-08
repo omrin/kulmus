@@ -9,3 +9,4 @@ models/*
 *.part
 selftest.json
 *.lnk
+site/_site/
